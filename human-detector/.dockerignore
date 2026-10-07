@@ -1,0 +1,9 @@
+.env
+.git
+.gitignore
+data/
+uploads/
+models/
+__pycache__/
+*.pyc
+README.md

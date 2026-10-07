@@ -1,0 +1,23 @@
+[Unit]
+Description=ATLAS Raspberry Pi metrics agent
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=atlas-agent
+Group=atlas-agent
+EnvironmentFile=/etc/atlas-agent.env
+ExecStart=/usr/bin/python3 /opt/atlas-agent/atlas_pi_agent.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

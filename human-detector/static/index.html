@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Argus — Détecteur d'humain</title>
+<title>ATLAS — Détecteur d'humain</title>
 <style>
 :root {
   --bg: #080b10;
@@ -133,6 +133,27 @@ a{color:var(--accent);text-decoration:none}
 .video-placeholder{display:flex;flex-direction:column;align-items:center;justify-content:center;
   gap:12px;padding:60px 20px;color:var(--muted);font-size:.9rem;text-align:center}
 .video-icon{font-size:2.5rem;opacity:.3}
+
+.system-card{padding:16px}
+.system-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px}
+.system-title{font-size:.95rem;font-weight:750}
+.system-updated{font-size:.72rem;color:var(--muted);white-space:nowrap}
+.system-source{font-size:.75rem;color:var(--muted);margin:-4px 0 12px}
+.system-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.system-metric{min-width:0;padding:12px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--r-sm)}
+.system-metric-head{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.system-label{font-size:.78rem;color:var(--muted)}
+.system-value{font-size:1.15rem;font-weight:750;font-variant-numeric:tabular-nums;white-space:nowrap}
+.system-chart{display:block;width:100%;height:44px;margin:7px 0 2px;overflow:visible}
+.system-chart-grid{stroke:var(--border);stroke-width:1;stroke-dasharray:3 4}
+.system-chart-line{fill:none;stroke:var(--accent);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.system-metric:nth-child(2) .system-chart-line{stroke:var(--accent2)}
+.system-metric:nth-child(3) .system-chart-line{stroke:var(--ok)}
+.system-metric:nth-child(4) .system-chart-line{stroke:var(--warn)}
+.system-detail{font-size:.72rem;color:var(--muted);min-height:1.1em}
+.system-axis{display:flex;justify-content:space-between;margin-top:8px;color:var(--muted);font-size:.68rem}
+.system-error{font-size:.78rem;color:var(--danger);margin-top:8px}
+@media(max-width:420px){.system-grid{grid-template-columns:1fr}}
 
 .controls-bar{display:flex;align-items:center;gap:10px;padding:10px 4px 0}
 .controls-bar[hidden]{display:none}
@@ -294,7 +315,7 @@ label.date-label{font-size:.83rem;color:var(--muted);display:flex;align-items:ce
       </svg>
     </div>
     <div>
-      <div class="brand-name">Argus</div>
+      <div class="brand-name">ATLAS</div>
       <div class="brand-sub">Détecteur d'humain</div>
     </div>
   </a>
@@ -370,6 +391,38 @@ label.date-label{font-size:.83rem;color:var(--muted);display:flex;align-items:ce
             <span class="time-lbl" id="time">0:00 / 0:00</span>
           </div>
         </div>
+
+        <section class="card system-card" aria-labelledby="system-title">
+          <div class="system-header">
+            <h2 class="system-title" id="system-title">État de la machine ATLAS</h2>
+            <span class="system-updated" id="system-updated">Chargement…</span>
+          </div>
+          <p class="system-source" id="system-source">Détection de la source des mesures…</p>
+          <div class="system-grid">
+            <article class="system-metric">
+              <div class="system-metric-head"><span class="system-label">Processeur</span><span class="system-value" id="system-cpu">—</span></div>
+              <svg class="system-chart" viewBox="0 0 300 44" role="img" aria-label="Charge CPU sur les cinq dernières minutes"><path class="system-chart-grid" d="M0 22H300"></path><path class="system-chart-line" id="system-chart-cpu"></path></svg>
+              <div class="system-detail" id="system-cpu-detail">Utilisation CPU · 5 min</div>
+            </article>
+            <article class="system-metric">
+              <div class="system-metric-head"><span class="system-label">Mémoire</span><span class="system-value" id="system-memory">—</span></div>
+              <svg class="system-chart" viewBox="0 0 300 44" role="img" aria-label="Utilisation mémoire sur les cinq dernières minutes"><path class="system-chart-grid" d="M0 22H300"></path><path class="system-chart-line" id="system-chart-memory"></path></svg>
+              <div class="system-detail" id="system-memory-detail">Utilisation mémoire · 5 min</div>
+            </article>
+            <article class="system-metric">
+              <div class="system-metric-head"><span class="system-label">Température</span><span class="system-value" id="system-temperature">—</span></div>
+              <svg class="system-chart" viewBox="0 0 300 44" role="img" aria-label="Température sur les cinq dernières minutes"><path class="system-chart-grid" d="M0 22H300"></path><path class="system-chart-line" id="system-chart-temperature"></path></svg>
+              <div class="system-detail" id="system-temperature-detail">Température CPU · 5 min</div>
+            </article>
+            <article class="system-metric">
+              <div class="system-metric-head"><span class="system-label">Disque</span><span class="system-value" id="system-disk">—</span></div>
+              <svg class="system-chart" viewBox="0 0 300 44" role="img" aria-label="Utilisation disque sur les cinq dernières minutes"><path class="system-chart-grid" d="M0 22H300"></path><path class="system-chart-line" id="system-chart-disk"></path></svg>
+              <div class="system-detail" id="system-disk-detail">Stockage des données · 5 min</div>
+            </article>
+          </div>
+          <div class="system-axis"><span>−5 min</span><span>Maintenant</span></div>
+          <p class="system-error" id="system-error" role="status" hidden></p>
+        </section>
       </div>
 
       <!-- Colonne droite : alarme -->
@@ -725,6 +778,74 @@ setInterval(async () => {
     }
   } catch { $('error').textContent = 'Serveur injoignable'; }
 }, 500);
+
+// ─── métriques du serveur ─────────────────────────────────────
+const SYSTEM_WINDOW_MS = 5 * 60 * 1000;
+const systemSamples = [];
+let systemSource = null;
+const formatBytes = bytes => {
+  const units = ['o', 'Ko', 'Mo', 'Go', 'To'];
+  let value = bytes, unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+};
+
+function renderSystemStats(now = Date.now()) {
+  const oldest = now - SYSTEM_WINDOW_MS;
+  while (systemSamples.length && systemSamples[0].timestamp < oldest) systemSamples.shift();
+  const metrics = [
+    {key:'cpu_percent', id:'cpu', value:id=>`${id.toFixed(1)} %`, detail:()=> 'Utilisation CPU · 5 min'},
+    {key:'memory_percent', id:'memory', value:id=>`${id.toFixed(1)} %`, detail:sample=>`${formatBytes(sample.memory_used)} / ${formatBytes(sample.memory_total)}`},
+    {key:'temperature_c', id:'temperature', value:id=>`${id.toFixed(1)} °C`, detail:()=> 'Température CPU · 5 min'},
+    {key:'disk_percent', id:'disk', value:id=>`${id.toFixed(1)} %`, detail:sample=>`${formatBytes(sample.disk_used)} / ${formatBytes(sample.disk_total)}`}
+  ];
+  for (const metric of metrics) {
+    const values = systemSamples.filter(sample => Number.isFinite(sample[metric.key]));
+    const latest = values[values.length - 1];
+    $(`system-${metric.id}`).textContent = latest ? metric.value(latest[metric.key]) : 'N/D';
+    $(`system-${metric.id}-detail`).textContent = latest ? metric.detail(latest) : 'Aucune donnée disponible';
+    const path = $(`system-chart-${metric.id}`);
+    if (!values.length) { path.setAttribute('d', ''); continue; }
+    const raw = values.map(sample => sample[metric.key]);
+    const min = Math.min(...raw), max = Math.max(...raw);
+    const padding = Math.max((max - min) * 0.15, metric.id === 'temperature' ? 1 : 2);
+    const lower = Math.max(0, min - padding), upper = max + padding || 1;
+    const points = values.map(sample => {
+      const x = Math.max(0, Math.min(300, (sample.timestamp - oldest) / SYSTEM_WINDOW_MS * 300));
+      const y = 40 - (sample[metric.key] - lower) / (upper - lower) * 36;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+    path.setAttribute('d', `M${points.join(' L')}`);
+  }
+}
+
+async function loadSystemStats() {
+  try {
+    const response = await fetch('/api/system/stats');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const sample = await response.json();
+    if (systemSource !== sample.source) {
+      systemSamples.length = 0;
+      systemSource = sample.source;
+    }
+    sample.timestamp = Number.isFinite(sample.timestamp) ? sample.timestamp * 1000 : Date.now();
+    systemSamples.push(sample);
+    renderSystemStats();
+    $('system-source').textContent = sample.source === 'raspberry_pi'
+      ? `Raspberry Pi connecté${sample.hostname ? ` · ${sample.hostname}` : ''}`
+      : sample.agent_configured
+        ? 'Agent Pi hors ligne · mesures locales du PC ATLAS'
+        : 'Mesures locales du PC ATLAS · agent Pi non configuré';
+    $('system-updated').textContent = `Mis à jour à ${new Date(sample.timestamp).toLocaleTimeString('fr-FR')}`;
+    $('system-error').hidden = true;
+  } catch (error) {
+    $('system-error').textContent = `Impossible de charger les métriques du serveur (${error.message}).`;
+    $('system-error').hidden = false;
+  }
+}
+
+loadSystemStats();
+setInterval(loadSystemStats, 5000);
 
 // ─── historique ──────────────────────────────────────────────
 const PAGE = 48;

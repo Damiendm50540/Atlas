@@ -4,6 +4,7 @@ import hmac
 import os
 import shutil
 import smtplib
+import socket
 import sqlite3
 import ssl
 import threading
@@ -24,14 +25,15 @@ os.environ.setdefault(
 import cv2  # noqa: E402
 import mediapipe as mp
 import numpy as np
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+import psutil
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from history import CAPTURES_DIR, History
+from history import CAPTURES_DIR, DATA_DIR, History
 from face_db import FaceDB
 
 BASE = Path(__file__).parent
@@ -116,7 +118,7 @@ def load_env():
 
 def notify(jpeg):
     """Envoie l'alerte (avec la photo) par ntfy et/ou email selon la config."""
-    title, text = "🚨 Argus", "Humain détecté pendant que l'alarme est activée."
+    title, text = "🚨 ATLAS", "Humain détecté pendant que l'alarme est activée."
     ctx = ssl.create_default_context(cafile=certifi.where())
     topic = os.environ.get("NTFY_TOPIC")
     if topic:
@@ -162,6 +164,10 @@ MAX_LOGIN_ATTEMPTS = int(os.environ.get("APP_MAX_LOGIN_ATTEMPTS", "5"))
 LOGIN_BLOCK_SECONDS = int(os.environ.get("APP_LOGIN_BLOCK_SECONDS", "300"))
 USER_DB_PATH = BASE / "data" / "users.db"
 LOGIN_ATTEMPTS = {}
+AGENT_METRICS_MAX_AGE = 20.0
+AGENT_TIMESTAMP_SKEW_SECONDS = 120.0
+AGENT_METRICS_LOCK = threading.Lock()
+AGENT_METRICS = None
 
 
 def _hash_password(password: str) -> str:
@@ -362,7 +368,7 @@ async def security_middleware(request: Request, call_next):
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
     public_paths = {"/login", "/api/login"}
-    if path in public_paths or path.startswith("/static/"):
+    if path in public_paths or path == "/api/system/agent" or path.startswith("/static/"):
         return await call_next(request)
     if path.startswith("/api/") or path in {"/", "/captures", "/people-photos"}:
         user = get_session_user(request)
@@ -382,7 +388,7 @@ def login_page():
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>Argus — connexion</title>
+      <title>ATLAS — connexion</title>
       <style>
         :root { color-scheme: dark; --bg:#0f1115; --panel:#181b21; --line:#2a2f38; --text:#e8eaed; --muted:#9aa0aa; --accent:#60a5fa; }
         *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh} .box{width:min(420px,90vw);background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px 24px;box-shadow:0 18px 40px rgba(0,0,0,.3)} .brand{display:flex;align-items:center;gap:14px;margin-bottom:22px} .logo{width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,#60a5fa,#8b5cf6);display:grid;place-items:center;box-shadow:0 10px 20px rgba(96,165,250,.32)} .logo svg{width:28px;height:28px;display:block} .title-wrap{display:flex;flex-direction:column;line-height:1.1} .project{margin:0;font-size:1.8rem;font-weight:800;letter-spacing:.02em} .subtitle{margin:4px 0 0;color:var(--muted);font-size:.9rem} h1{margin:0 0 20px;font-size:1.25rem;font-weight:700;color:var(--text)} label{display:block;margin-bottom:8px;color:var(--muted)} input{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:#0d1117;color:var(--text);margin-bottom:16px} button{width:100%;padding:12px;border:0;border-radius:10px;background:var(--accent);color:#0b1220;font-weight:700;cursor:pointer}.hint{color:var(--muted);font-size:.9rem;margin-top:12px}
@@ -391,7 +397,7 @@ def login_page():
     <body>
       <div class="box">
         <div class="brand">
-          <div class="logo" aria-label="Logo Argus">
+          <div class="logo" aria-label="Logo ATLAS">
             <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
               <path d="M32 10C20.954 10 12 18.954 12 30C12 41.046 20.954 50 32 50C43.046 50 52 41.046 52 30C52 18.954 43.046 10 32 10ZM32 15.5C40.008 15.5 46.5 21.992 46.5 30C46.5 38.008 40.008 44.5 32 44.5C23.992 44.5 17.5 38.008 17.5 30C17.5 21.992 23.992 15.5 32 15.5Z" fill="white" opacity="0.92"/>
               <path d="M32 24C27.582 24 24 27.582 24 32C24 36.418 27.582 40 32 40C36.418 40 40 36.418 40 32C40 27.582 36.418 24 32 24ZM32 27.5C34.485 27.5 36.5 29.515 36.5 32C36.5 34.485 34.485 36.5 32 36.5C29.515 36.5 27.5 34.485 27.5 32C27.5 29.515 29.515 27.5 32 27.5Z" fill="white"/>
@@ -399,7 +405,7 @@ def login_page():
             </svg>
           </div>
           <div class="title-wrap">
-            <p class="project">Argus</p>
+            <p class="project">ATLAS</p>
             <span class="subtitle">Détecteur d'humain</span>
           </div>
         </div>
@@ -778,6 +784,19 @@ class StartRequest(BaseModel):
     url: str
 
 
+class AgentSystemMetrics(BaseModel):
+    hostname: str = Field(min_length=1, max_length=63)
+    cpu_percent: float | None = Field(default=None, ge=0, le=100)
+    memory_percent: float = Field(ge=0, le=100)
+    memory_used: int = Field(ge=0)
+    memory_total: int = Field(gt=0)
+    temperature_c: float | None = Field(default=None, ge=-50, le=200)
+    disk_percent: float = Field(ge=0, le=100)
+    disk_used: int = Field(ge=0)
+    disk_total: int = Field(gt=0)
+    timestamp: float = Field(gt=0)
+
+
 @app.post("/api/start")
 def start(req: StartRequest):
     detector.start(req.url.strip())
@@ -853,6 +872,110 @@ def status():
     ds = state.pop("detection_start", None)
     state["countdown"] = round(max(0.0, 4.0 - (time.time() - ds)), 1) if ds is not None else None
     return state
+
+
+def _read_temperature_c():
+    sensor_reader = getattr(psutil, "sensors_temperatures", None)
+    try:
+        sensors = sensor_reader() if sensor_reader else {}
+    except (NotImplementedError, OSError):
+        sensors = {}
+    readings = [
+        (sensor.label or name, sensor.current)
+        for name, entries in sensors.items()
+        for sensor in entries
+        if sensor.current is not None
+    ]
+    if readings:
+        cpu_readings = [
+            temperature for name, temperature in readings
+            if any(token in name.lower() for token in ("cpu", "core", "soc", "thermal"))
+        ]
+        return round(cpu_readings[0] if cpu_readings else readings[0][1], 1)
+
+    thermal_dir = Path("/host-thermal")
+    if not thermal_dir.is_dir():
+        thermal_dir = Path("/sys/class/thermal")
+    zones = sorted(thermal_dir.glob("thermal_zone*/temp"))
+    preferred = []
+    other = []
+    for temp_path in zones:
+        try:
+            temperature = int(temp_path.read_text().strip()) / 1000
+        except (OSError, ValueError):
+            continue
+        type_path = temp_path.parent / "type"
+        try:
+            label = type_path.read_text().strip().lower()
+        except OSError:
+            label = ""
+        if any(token in label for token in ("cpu", "core", "soc", "thermal")):
+            preferred.append(temperature)
+        else:
+            other.append(temperature)
+    values = preferred or other
+    return round(values[0], 1) if values else None
+
+
+def read_system_stats():
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage(str(DATA_DIR))
+    return {
+        "cpu_percent": round(psutil.cpu_percent(interval=None), 1),
+        "memory_percent": round(memory.percent, 1),
+        "memory_used": memory.used,
+        "memory_total": memory.total,
+        "temperature_c": _read_temperature_c(),
+        "disk_percent": round(disk.percent, 1),
+        "disk_used": disk.used,
+        "disk_total": disk.total,
+        "timestamp": time.time(),
+    }
+
+
+def current_system_stats():
+    with AGENT_METRICS_LOCK:
+        agent_metrics = AGENT_METRICS.copy() if AGENT_METRICS is not None else None
+    now = time.time()
+    if agent_metrics and now - agent_metrics["timestamp"] <= AGENT_METRICS_MAX_AGE:
+        agent_metrics.update(source="raspberry_pi", agent_connected=True)
+        return agent_metrics
+
+    local_metrics = read_system_stats()
+    local_metrics.update(
+        source="local",
+        hostname=socket.gethostname(),
+        agent_connected=False,
+        agent_configured=bool(os.environ.get("ATLAS_AGENT_TOKEN")),
+    )
+    return local_metrics
+
+
+@app.get("/api/system/stats")
+def system_stats():
+    return current_system_stats()
+
+
+@app.post("/api/system/agent")
+def receive_agent_system_stats(
+    metrics: AgentSystemMetrics,
+    authorization: str | None = Header(default=None),
+):
+    global AGENT_METRICS
+    expected_token = os.environ.get("ATLAS_AGENT_TOKEN", "")
+    if not expected_token:
+        raise HTTPException(status_code=503, detail="Agent Raspberry Pi non configuré")
+    if not authorization or not hmac.compare_digest(authorization, f"Bearer {expected_token}"):
+        raise HTTPException(status_code=401, detail="Jeton agent invalide")
+    if abs(time.time() - metrics.timestamp) > AGENT_TIMESTAMP_SKEW_SECONDS:
+        raise HTTPException(status_code=422, detail="Horodatage du relevé trop ancien ou décalé")
+    if metrics.memory_used > metrics.memory_total or metrics.disk_used > metrics.disk_total:
+        raise HTTPException(status_code=422, detail="Les valeurs utilisées dépassent la capacité totale")
+    with AGENT_METRICS_LOCK:
+        if AGENT_METRICS and metrics.timestamp < AGENT_METRICS["timestamp"]:
+            raise HTTPException(status_code=409, detail="Un relevé plus récent a déjà été reçu")
+        AGENT_METRICS = metrics.model_dump()
+    return {"ok": True}
 
 
 def mjpeg():

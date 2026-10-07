@@ -28,6 +28,8 @@ source .venv/bin/activate      # Windows : .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+Sous Windows, le fichier installe MediaPipe 0.10.35, nécessaire au détecteur avec les versions récentes de Python.
+
 > **Note :** `torch` et `facenet-pytorch` sont nécessaires pour la reconnaissance faciale.  
 > Si tu veux uniquement la détection (sans reconnaissance), tu peux les retirer de `requirements.txt`.
 

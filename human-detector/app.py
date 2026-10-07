@@ -565,6 +565,13 @@ class Detector:
             ),
             min_detection_confidence=MIN_SCORE,
         )
+        try:
+            face_detector = vision.FaceDetector.create_from_options(options)
+        except Exception as e:
+            message = f"Initialisation du détecteur impossible : {e}"
+            print(f"[détection] {message}")
+            self._set(running=False, connected=False, error=message)
+            return
         last_seen = 0.0
         ep_id = ep_photo = ep_crop = None  # épisode (passage) en cours dans l'historique
         ep_score = ep_saved = ep_touched = 0.0
@@ -572,7 +579,7 @@ class Detector:
         ep_person_id = ep_person_name = None  # personne reconnue pour cet épisode
         last_recog = 0.0  # dernière tentative de reconnaissance
         detection_start = None  # horodatage du premier visage inconnu détecté (alarme différée)
-        with vision.FaceDetector.create_from_options(options) as detector:
+        with face_detector as detector:
             while not stop.is_set():
                 cap, open_error = open_capture(url)
                 if cap is None:

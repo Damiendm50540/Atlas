@@ -5,7 +5,8 @@ certifi
 # MediaPipe >= 1.0 plante sur macOS (initialisation Metal) ; 0.10.30 n'a pas de build Linux ARM
 mediapipe==0.10.30; sys_platform == "darwin"
 mediapipe==0.10.18; sys_platform == "linux"
-opencv-python
+mediapipe==0.10.35; sys_platform == "win32"
+opencv-python; sys_platform != "win32"
 # Reconnaissance faciale (embeddings 512-d via InceptionResnetV1)
 torch
 torchvision

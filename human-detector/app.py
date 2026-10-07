@@ -641,7 +641,10 @@ class Detector:
                                 if pid is not None:
                                     ep_person_id, ep_person_name = pid, pname
                         # alarme différée : 4 s pour reconnaître la personne avant de déclencher
-                        if self.armed and not self.alarm:
+                        if self.alarm and ep_person_id is not None:
+                            self.alarm = False  # personne connue → éteint l'alarme, reste armé
+                            detection_start = None
+                        elif self.armed and not self.alarm:
                             if ep_person_id is not None:
                                 detection_start = None  # personne autorisée → on ne déclenche pas
                             else:

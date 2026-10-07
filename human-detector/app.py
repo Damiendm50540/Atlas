@@ -515,7 +515,8 @@ class Detector:
     @staticmethod
     def _blank_state():
         return {"running": False, "connected": False, "human_detected": False, "faces": 0, "error": None,
-                "is_file": False, "paused": False, "position": 0, "duration": 0, "person": None}
+                "is_file": False, "paused": False, "position": 0, "duration": 0, "person": None,
+                "detection_start": None}
 
     def pause(self):
         self.paused = True
@@ -570,6 +571,7 @@ class Detector:
         ep_faces, ep_alarm = 0, False
         ep_person_id = ep_person_name = None  # personne reconnue pour cet épisode
         last_recog = 0.0  # dernière tentative de reconnaissance
+        detection_start = None  # horodatage du premier visage inconnu détecté (alarme différée)
         with vision.FaceDetector.create_from_options(options) as detector:
             while not stop.is_set():
                 cap, open_error = open_capture(url)
@@ -624,9 +626,6 @@ class Detector:
                     best, crop_jpeg = None, None
                     if n:
                         last_seen = now
-                        if self.armed and not self.alarm:
-                            self.alarm = True  # reste déclenchée jusqu'à la saisie du bon code
-                            triggered = True
                         best = max(dets, key=lambda d: d.categories[0].score)
                         score = best.categories[0].score
                         # nouvel épisode, ou meilleure prise de vue du même passage : on garde le visage net
@@ -641,8 +640,23 @@ class Detector:
                                 pid, pname = face_db.recognize(face_crop)
                                 if pid is not None:
                                     ep_person_id, ep_person_name = pid, pname
-                    elif ep_id is not None and now - last_seen > EPISODE_GAP:
-                        ep_person_id = ep_person_name = None  # réinitialise pour le prochain épisode
+                        # alarme différée : 4 s pour reconnaître la personne avant de déclencher
+                        if self.armed and not self.alarm:
+                            if ep_person_id is not None:
+                                detection_start = None  # personne autorisée → on ne déclenche pas
+                            else:
+                                if detection_start is None:
+                                    detection_start = now
+                                elif now - detection_start >= 4.0:
+                                    self.alarm = True
+                                    triggered = True
+                                    detection_start = None
+                        else:
+                            detection_start = None
+                    else:
+                        detection_start = None
+                        if ep_id is not None and now - last_seen > EPISODE_GAP:
+                            ep_person_id = ep_person_name = None  # réinitialise pour le prochain épisode
                     for d in dets:
                         b = d.bounding_box
                         is_best = d is best
@@ -698,7 +712,8 @@ class Detector:
                             self.frame_jpeg = buf.tobytes()
                         self.state.update(faces=n, human_detected=(now - last_seen) < HOLD_SECONDS,
                                           paused=self.paused, position=position,
-                                          person=ep_person_name if n else None)
+                                          person=ep_person_name if n else None,
+                                          detection_start=detection_start)
                     if is_file:  # cadence de lecture normale pour un fichier (la vidéo boucle)
                         stop.wait(max(0, delay - (time.time() - t0)))
                 if live:
@@ -824,7 +839,10 @@ def stop():
 @app.get("/api/status")
 def status():
     with detector.lock:
-        return {**detector.state, "armed": detector.armed, "alarm": detector.alarm}
+        state = {**detector.state, "armed": detector.armed, "alarm": detector.alarm}
+    ds = state.pop("detection_start", None)
+    state["countdown"] = round(max(0.0, 4.0 - (time.time() - ds)), 1) if ds is not None else None
+    return state
 
 
 def mjpeg():

@@ -1,3 +1,4 @@
+import json
 import sys
 import time
 import unittest
@@ -12,6 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import app as app_module
+from atlas_pi_agent import signature_headers
 
 
 def valid_agent_metrics(**overrides):
@@ -29,6 +31,12 @@ def valid_agent_metrics(**overrides):
     }
     metrics.update(overrides)
     return app_module.AgentSystemMetrics(**metrics)
+
+
+def signed_agent_request(metrics, token="test-secret", request_timestamp=None):
+    payload = json.dumps(metrics.model_dump(), separators=(",", ":")).encode("utf-8")
+    request_timestamp = str(request_timestamp if request_timestamp is not None else int(time.time()))
+    return payload, signature_headers(token, payload, request_timestamp)
 
 
 class SystemMetricsTests(unittest.TestCase):
@@ -55,27 +63,51 @@ class SystemMetricsTests(unittest.TestCase):
         self.assertIsNone(app_module._read_temperature_c())
 
     def test_agent_requires_a_configured_token(self):
+        payload, headers = signed_agent_request(valid_agent_metrics())
         with patch.dict(app_module.os.environ, {}, clear=False):
             app_module.os.environ.pop("ATLAS_AGENT_TOKEN", None)
-            with self.assertRaises(app_module.HTTPException) as error:
-                app_module.receive_agent_system_stats(valid_agent_metrics(), "Bearer secret")
-        self.assertEqual(error.exception.status_code, 503)
+            response = TestClient(app_module.app).post(
+                "/api/system/agent", content=payload, headers=headers
+            )
+        self.assertEqual(response.status_code, 503)
 
     @patch.dict(app_module.os.environ, {"ATLAS_AGENT_TOKEN": "test-secret"})
-    def test_agent_rejects_an_invalid_token(self):
-        with self.assertRaises(app_module.HTTPException) as error:
-            app_module.receive_agent_system_stats(valid_agent_metrics(), "Bearer wrong")
-        self.assertEqual(error.exception.status_code, 401)
+    def test_agent_rejects_an_invalid_signature(self):
+        payload, headers = signed_agent_request(valid_agent_metrics(), token="wrong")
+        response = TestClient(app_module.app).post(
+            "/api/system/agent", content=payload, headers=headers
+        )
+        self.assertEqual(response.status_code, 401)
+
+    @patch.dict(app_module.os.environ, {"ATLAS_AGENT_TOKEN": "test-secret"})
+    def test_agent_rejects_invalid_timestamp_format(self):
+        payload, headers = signed_agent_request(valid_agent_metrics())
+        headers["X-Atlas-Timestamp"] = "not-a-timestamp"
+        response = TestClient(app_module.app).post(
+            "/api/system/agent", content=payload, headers=headers
+        )
+        self.assertEqual(response.status_code, 401)
+
+    @patch.dict(app_module.os.environ, {"ATLAS_AGENT_TOKEN": "test-secret"})
+    def test_agent_rejects_oversized_payload(self):
+        _, headers = signed_agent_request(valid_agent_metrics())
+        payload = b"x" * (app_module.MAX_AGENT_PAYLOAD_BYTES + 1)
+        response = TestClient(app_module.app).post(
+            "/api/system/agent", content=payload, headers=headers
+        )
+        self.assertEqual(response.status_code, 413)
 
     @patch.dict(app_module.os.environ, {"ATLAS_AGENT_TOKEN": "test-secret"})
     def test_valid_agent_metrics_are_stored_and_returned_as_raspberry_pi(self):
         previous = app_module.AGENT_METRICS
         try:
             app_module.AGENT_METRICS = None
-            response = app_module.receive_agent_system_stats(
-                valid_agent_metrics(), "Bearer test-secret"
+            payload, headers = signed_agent_request(valid_agent_metrics())
+            response = TestClient(app_module.app).post(
+                "/api/system/agent", content=payload, headers=headers
             )
-            self.assertEqual(response, {"ok": True})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"ok": True})
             stats = app_module.current_system_stats()
             self.assertEqual(stats["source"], "raspberry_pi")
             self.assertEqual(stats["hostname"], "atlas-pi")
@@ -85,21 +117,21 @@ class SystemMetricsTests(unittest.TestCase):
 
     @patch.dict(app_module.os.environ, {"ATLAS_AGENT_TOKEN": "test-secret"})
     def test_agent_rejects_stale_metrics(self):
-        with self.assertRaises(app_module.HTTPException) as error:
-            app_module.receive_agent_system_stats(
-                valid_agent_metrics(timestamp=time.time() - 121),
-                "Bearer test-secret",
-            )
-        self.assertEqual(error.exception.status_code, 422)
+        payload, headers = signed_agent_request(
+            valid_agent_metrics(timestamp=time.time() - 121)
+        )
+        response = TestClient(app_module.app).post(
+            "/api/system/agent", content=payload, headers=headers
+        )
+        self.assertEqual(response.status_code, 422)
 
     @patch.dict(app_module.os.environ, {"ATLAS_AGENT_TOKEN": "test-secret"})
     def test_agent_rejects_capacity_values_above_total(self):
-        with self.assertRaises(app_module.HTTPException) as error:
-            app_module.receive_agent_system_stats(
-                valid_agent_metrics(memory_used=1001),
-                "Bearer test-secret",
-            )
-        self.assertEqual(error.exception.status_code, 422)
+        payload, headers = signed_agent_request(valid_agent_metrics(memory_used=1001))
+        response = TestClient(app_module.app).post(
+            "/api/system/agent", content=payload, headers=headers
+        )
+        self.assertEqual(response.status_code, 422)
 
     @patch.dict(app_module.os.environ, {"ATLAS_AGENT_TOKEN": "test-secret"})
     @patch.object(app_module, "read_system_stats", return_value={"cpu_percent": 0.0})
@@ -115,19 +147,62 @@ class SystemMetricsTests(unittest.TestCase):
         self.assertTrue(stats["agent_configured"])
 
     @patch.dict(app_module.os.environ, {"ATLAS_AGENT_TOKEN": "test-secret"})
-    def test_agent_endpoint_accepts_token_without_a_web_session(self):
+    def test_agent_endpoint_accepts_signed_metrics_without_a_web_session(self):
         previous = app_module.AGENT_METRICS
         try:
             app_module.AGENT_METRICS = None
+            payload, headers = signed_agent_request(valid_agent_metrics())
             response = TestClient(app_module.app).post(
-                "/api/system/agent",
-                json=valid_agent_metrics().model_dump(),
-                headers={"Authorization": "Bearer test-secret"},
+                "/api/system/agent", content=payload, headers=headers
             )
         finally:
             app_module.AGENT_METRICS = previous
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"ok": True})
+
+    @patch.dict(app_module.os.environ, {"ATLAS_AGENT_TOKEN": "test-secret"})
+    def test_payload_tampering_invalidates_signature(self):
+        payload, headers = signed_agent_request(valid_agent_metrics())
+        tampered_payload = payload.replace(b'"cpu_percent":18.7', b'"cpu_percent":19.7')
+        response = TestClient(app_module.app).post(
+            "/api/system/agent", content=tampered_payload, headers=headers
+        )
+        self.assertEqual(response.status_code, 401)
+
+    @patch.dict(app_module.os.environ, {"ATLAS_AGENT_TOKEN": "test-secret"})
+    def test_agent_rejects_replayed_metrics(self):
+        previous = app_module.AGENT_METRICS
+        try:
+            app_module.AGENT_METRICS = None
+            payload, headers = signed_agent_request(valid_agent_metrics())
+            client = TestClient(app_module.app)
+            first_response = client.post(
+                "/api/system/agent", content=payload, headers=headers
+            )
+            replay_response = client.post(
+                "/api/system/agent", content=payload, headers=headers
+            )
+        finally:
+            app_module.AGENT_METRICS = previous
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(replay_response.status_code, 409)
+
+    def test_failed_face_recognition_clears_authorized_identity(self):
+        class FakeFaceDB:
+            def recognize(self, _face_crop):
+                return None, None
+
+        self.assertEqual(
+            app_module.recognize_current_person(FakeFaceDB(), object()),
+            (None, None),
+        )
+
+    def test_missing_face_crop_clears_authorized_identity(self):
+        class UnusedFaceDB:
+            def recognize(self, _face_crop):
+                self.fail("recognition should not run without a face crop")
+
+        self.assertEqual(app_module.recognize_current_person(UnusedFaceDB(), None), (None, None))
 
 
 if __name__ == "__main__":

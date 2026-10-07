@@ -2,6 +2,7 @@
 data/
 uploads/
 .env
+cookies.txt
 __pycache__/
 venv/
 *.pyc

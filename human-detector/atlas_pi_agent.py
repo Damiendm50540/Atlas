@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Lightweight Linux agent that sends Raspberry Pi metrics to the ATLAS backend."""
 
+import hashlib
+import hmac
 import json
 import os
 import shutil
@@ -94,6 +96,18 @@ def collect_metrics(cpu_sampler):
     }
 
 
+def signature_headers(token, payload, request_timestamp):
+    signed_message = request_timestamp.encode("ascii") + b"\n" + payload
+    signature = hmac.new(
+        token.encode("utf-8"), signed_message, hashlib.sha256
+    ).hexdigest()
+    return {
+        "X-Atlas-Timestamp": request_timestamp,
+        "X-Atlas-Signature": signature,
+        "Content-Type": "application/json",
+    }
+
+
 def main():
     backend_url = os.environ.get("ATLAS_URL", "").strip().rstrip("/")
     token = os.environ.get("ATLAS_AGENT_TOKEN", "").strip()
@@ -107,14 +121,12 @@ def main():
     while True:
         try:
             payload = json.dumps(collect_metrics(cpu_sampler)).encode("utf-8")
+            request_timestamp = str(int(time.time()))
             request = Request(
                 endpoint,
                 data=payload,
                 method="POST",
-                headers={
-                    "Authorization": f"Bearer {token}",
-                    "Content-Type": "application/json",
-                },
+                headers=signature_headers(token, payload, request_timestamp),
             )
             with urlopen(request, timeout=4) as response:
                 if response.status != 200:

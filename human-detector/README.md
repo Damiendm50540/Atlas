@@ -149,6 +149,8 @@ py -3 -c "import secrets; print(secrets.token_urlsafe(32))"
    sudo nano /etc/atlas-agent.env
    ```
 
+   Si le service agent est déjà installé, ne recrée pas le compte avec `useradd` et ne remplace pas sa configuration. Copie le nouveau script avec `scp` et la commande `sudo install` ci-dessus, puis redémarre le service :
+
    Dans `/etc/atlas-agent.env`, renseigne les mêmes valeurs que ci-dessous, en remplaçant les exemples par l'adresse du PC et le même jeton qu'à l'étape 1 :
 
    ```ini
@@ -168,7 +170,9 @@ py -3 -c "import secrets; print(secrets.token_urlsafe(32))"
 
    L'agent tourne alors en arrière-plan au démarrage. Pour consulter ses erreurs : `sudo journalctl -u atlas-pi-agent -f`.
 
-La route de réception des métriques est protégée par le jeton secret configuré dans `.env`. Ne transfère pas le port ATLAS sur Internet; pour un réseau non fiable, utilise un VPN ou HTTPS.
+   Après une mise à jour de `atlas_pi_agent.py` sur un Pi déjà configuré, redémarre l'agent avec `sudo systemctl restart atlas-pi-agent`.
+
+La route de réception vérifie une signature HMAC-SHA256 calculée pour chaque relevé; le jeton partagé n'est plus envoyé sur le réseau. Les horodatages doivent dater de moins de 120 secondes et un relevé plus ancien que le dernier accepté est refusé (ce dernier état est conservé en mémoire). HTTP ne chiffre toutefois pas le contenu des métriques : garde l'agent sur un réseau local de confiance et n'expose pas le port ATLAS à Internet. Pour un réseau non fiable, utilise un VPN ou HTTPS.
 
 ---
 

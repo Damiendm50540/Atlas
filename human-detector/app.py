@@ -31,7 +31,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from history import CAPTURES_DIR, DATA_DIR, History
 from face_db import FaceDB
@@ -166,6 +166,7 @@ USER_DB_PATH = BASE / "data" / "users.db"
 LOGIN_ATTEMPTS = {}
 AGENT_METRICS_MAX_AGE = 20.0
 AGENT_TIMESTAMP_SKEW_SECONDS = 120.0
+MAX_AGENT_PAYLOAD_BYTES = 4096
 AGENT_METRICS_LOCK = threading.Lock()
 AGENT_METRICS = None
 
@@ -650,13 +651,9 @@ class Detector:
                             last_recog = now
                             b = best.bounding_box
                             face_crop = encode_crop_raw(frame, b)
-                            if face_crop is not None:
-                                pid, pname = face_db.recognize(face_crop)
-                                if pid is not None:
-                                    ep_person_id, ep_person_name = pid, pname
-                        # alarme différée : 4 s pour reconnaître la personne avant de déclencher
-                        if self.alarm and ep_person_id is not None:
-                            self.alarm = False  # personne connue → éteint l'alarme, reste armé
+                            ep_person_id, ep_person_name = recognize_current_person(face_db, face_crop)
+                        # une alarme active nécessite toujours le code pour être désarmée
+                        if self.alarm:
                             detection_start = None
                         elif self.armed and not self.alarm:
                             if ep_person_id is not None:
@@ -763,6 +760,13 @@ def encode_crop_raw(frame, b, margin=0.15):
     if x1 <= x0 or y1 <= y0:
         return None
     return frame[y0:y1, x0:x1]
+
+
+def recognize_current_person(face_db, face_crop):
+    if face_crop is None:
+        return None, None
+    person_id, person_name = face_db.recognize(face_crop)
+    return (person_id, person_name) if person_id is not None else (None, None)
 
 
 def safe_label(url):
@@ -959,22 +963,47 @@ def system_stats():
 
 
 @app.post("/api/system/agent")
-def receive_agent_system_stats(
-    metrics: AgentSystemMetrics,
-    authorization: str | None = Header(default=None),
+async def receive_agent_system_stats(
+    request: Request,
+    agent_timestamp: str | None = Header(default=None, alias="X-Atlas-Timestamp"),
+    signature: str | None = Header(default=None, alias="X-Atlas-Signature"),
 ):
     global AGENT_METRICS
     expected_token = os.environ.get("ATLAS_AGENT_TOKEN", "")
     if not expected_token:
         raise HTTPException(status_code=503, detail="Agent Raspberry Pi non configuré")
-    if not authorization or not hmac.compare_digest(authorization, f"Bearer {expected_token}"):
-        raise HTTPException(status_code=401, detail="Jeton agent invalide")
+    if not agent_timestamp or not signature:
+        raise HTTPException(status_code=401, detail="Signature agent manquante")
+    if not agent_timestamp.isascii() or not agent_timestamp.isdecimal():
+        raise HTTPException(status_code=401, detail="Horodatage agent invalide")
+    try:
+        request_timestamp = int(agent_timestamp)
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Horodatage agent invalide") from None
+    if abs(time.time() - request_timestamp) > AGENT_TIMESTAMP_SKEW_SECONDS:
+        raise HTTPException(status_code=422, detail="Horodatage de signature trop ancien ou décalé")
+    payload = bytearray()
+    async for chunk in request.stream():
+        if len(payload) + len(chunk) > MAX_AGENT_PAYLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Relevé agent trop volumineux")
+        payload.extend(chunk)
+    payload = bytes(payload)
+    signed_message = agent_timestamp.encode("ascii") + b"\n" + payload
+    expected_signature = hmac.new(
+        expected_token.encode("utf-8"), signed_message, hashlib.sha256
+    ).hexdigest()
+    if not hmac.compare_digest(signature.encode("utf-8"), expected_signature.encode("ascii")):
+        raise HTTPException(status_code=401, detail="Signature agent invalide")
+    try:
+        metrics = AgentSystemMetrics.model_validate_json(payload)
+    except ValidationError as e:
+        raise HTTPException(status_code=422, detail="Relevé agent invalide") from e
     if abs(time.time() - metrics.timestamp) > AGENT_TIMESTAMP_SKEW_SECONDS:
         raise HTTPException(status_code=422, detail="Horodatage du relevé trop ancien ou décalé")
     if metrics.memory_used > metrics.memory_total or metrics.disk_used > metrics.disk_total:
         raise HTTPException(status_code=422, detail="Les valeurs utilisées dépassent la capacité totale")
     with AGENT_METRICS_LOCK:
-        if AGENT_METRICS and metrics.timestamp < AGENT_METRICS["timestamp"]:
+        if AGENT_METRICS and metrics.timestamp <= AGENT_METRICS["timestamp"]:
             raise HTTPException(status_code=409, detail="Un relevé plus récent a déjà été reçu")
         AGENT_METRICS = metrics.model_dump()
     return {"ok": True}

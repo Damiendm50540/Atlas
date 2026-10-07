@@ -47,13 +47,10 @@ a{color:var(--accent);text-decoration:none}
   backdrop-filter:blur(12px);
   border-bottom:1px solid var(--border);
 }
-.brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--text);flex-shrink:0}
-.brand-icon{width:34px;height:34px;border-radius:9px;
-  background:linear-gradient(135deg,var(--accent),var(--accent2));
-  display:grid;place-items:center;box-shadow:0 0 16px var(--accent-glow)}
-.brand-icon svg{width:18px;height:18px;display:block}
-.brand-name{font-size:1.1rem;font-weight:800;letter-spacing:.04em}
-.brand-sub{font-size:.72rem;color:var(--muted);font-weight:400;margin-top:1px}
+.brand{display:flex;align-items:center;text-decoration:none;color:var(--text);flex-shrink:0}
+.brand-icon{display:none}
+.brand-logo{display:block;width:144px;height:52px;object-fit:contain;background:#fff;border-radius:8px}
+@media(max-width:640px){.brand-logo{width:112px;height:40px}}
 
 .tabs{display:flex;gap:2px;margin-left:auto;margin-right:auto;
   background:var(--surface2);padding:4px;border-radius:10px;border:1px solid var(--border)}
@@ -315,8 +312,7 @@ label.date-label{font-size:.83rem;color:var(--muted);display:flex;align-items:ce
       </svg>
     </div>
     <div>
-      <div class="brand-name">ATLAS</div>
-      <div class="brand-sub">Détecteur d'humain</div>
+      <img class="brand-logo" src="/static/atlas-logo.png" alt="ATLAS — Vision · Sentinelle-X">
     </div>
   </a>
 

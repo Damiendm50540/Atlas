@@ -391,11 +391,12 @@ def login_page():
       <title>ATLAS — connexion</title>
       <style>
         :root { color-scheme: dark; --bg:#0f1115; --panel:#181b21; --line:#2a2f38; --text:#e8eaed; --muted:#9aa0aa; --accent:#60a5fa; }
-        *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh} .box{width:min(420px,90vw);background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px 24px;box-shadow:0 18px 40px rgba(0,0,0,.3)} .brand{display:flex;align-items:center;gap:14px;margin-bottom:22px} .logo{width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,#60a5fa,#8b5cf6);display:grid;place-items:center;box-shadow:0 10px 20px rgba(96,165,250,.32)} .logo svg{width:28px;height:28px;display:block} .title-wrap{display:flex;flex-direction:column;line-height:1.1} .project{margin:0;font-size:1.8rem;font-weight:800;letter-spacing:.02em} .subtitle{margin:4px 0 0;color:var(--muted);font-size:.9rem} h1{margin:0 0 20px;font-size:1.25rem;font-weight:700;color:var(--text)} label{display:block;margin-bottom:8px;color:var(--muted)} input{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:#0d1117;color:var(--text);margin-bottom:16px} button{width:100%;padding:12px;border:0;border-radius:10px;background:var(--accent);color:#0b1220;font-weight:700;cursor:pointer}.hint{color:var(--muted);font-size:.9rem;margin-top:12px}
+        *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;display:grid;place-items:center;min-height:100vh} .box{width:min(420px,90vw);background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:28px 24px;box-shadow:0 18px 40px rgba(0,0,0,.3)} .brand{display:flex;align-items:center;gap:14px;margin-bottom:22px} .logo{width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,#60a5fa,#8b5cf6);display:grid;place-items:center;box-shadow:0 10px 20px rgba(96,165,250,.32)} .logo svg{width:28px;height:28px;display:block} .title-wrap{display:flex;flex-direction:column;line-height:1.1} .project{margin:0;font-size:1.8rem;font-weight:800;letter-spacing:.02em} .subtitle{margin:4px 0 0;color:var(--muted);font-size:.9rem} .box>.brand{display:none} .brand-logo{display:block;width:100%;max-width:320px;height:auto;margin:0 auto 22px;border-radius:8px} h1{margin:0 0 20px;font-size:1.25rem;font-weight:700;color:var(--text)} label{display:block;margin-bottom:8px;color:var(--muted)} input{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:#0d1117;color:var(--text);margin-bottom:16px} button{width:100%;padding:12px;border:0;border-radius:10px;background:var(--accent);color:#0b1220;font-weight:700;cursor:pointer}.hint{color:var(--muted);font-size:.9rem;margin-top:12px}
       </style>
     </head>
     <body>
       <div class="box">
+        <img class="brand-logo" src="/static/atlas-logo.png" alt="ATLAS — Vision · Sentinelle-X">
         <div class="brand">
           <div class="logo" aria-label="Logo ATLAS">
             <svg viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
@@ -775,6 +776,7 @@ def safe_label(url):
 events = History()
 detector = Detector()
 face_db = FaceDB(BASE / "data" / "people.db", PEOPLE_DIR)
+app.mount("/static", StaticFiles(directory=BASE / "static"), name="static")
 app.mount("/captures", StaticFiles(directory=CAPTURES_DIR), name="captures")
 PEOPLE_DIR.mkdir(parents=True, exist_ok=True)
 app.mount("/people-photos", StaticFiles(directory=PEOPLE_DIR), name="people-photos")

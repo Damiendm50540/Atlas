@@ -120,12 +120,46 @@ Un **événement = un passage** : créé au premier visage validé, mis à jour 
 - **Protections côté serveur** : jeton obligatoire (sinon 503), corps ≤ 4 Ko, horodatage à ± 120 s, validation Pydantic, refus d'un relevé plus ancien que le dernier reçu (rejeu).
 - Déploiement du service : voir `README.md` (systemd, `/etc/atlas-agent.env`).
 
-## 9. Déploiement
+## 9. Infrastructure réseau du Raspberry Pi
+
+Le Pi sert de passerelle entre la caméra IP et ATLAS : il est durci, isolé sur un réseau câblé dédié, et relaie le flux de la caméra. Les commandes exactes ne sont pas reprises ici ; voici ce qui a été fait et pourquoi.
+
+```mermaid
+flowchart LR
+    CAM["Caméra IP<br/>192.168.10.41"] -- "RTSP (LAN câblé)" --> PI["Raspberry Pi<br/>192.168.10.15 · MediaMTX"]
+    PI -- "RTSP :8554" --> ATLAS["Serveur ATLAS"]
+    ADMIN["Poste admin"] -- "SSH :22 (clé)" --> PI
+```
+
+### 9.1 Système et accès SSH
+- Système mis à jour (`apt full-upgrade`).
+- **Authentification SSH par clé uniquement** : une clé RSA 4096 bits est générée sur le poste admin et déposée dans `~/.ssh/authorized_keys` du Pi (droits 700/600). Dans `sshd_config` : `PubkeyAuthentication yes` et `PasswordAuthentication no`, ce qui supprime toute attaque par mot de passe sur SSH.
+
+### 9.2 Pare-feu (UFW)
+- Politique par défaut : **tout le trafic entrant refusé**, sortant autorisé.
+- Ports ouverts : `22/tcp` (SSH), `443/tcp` (HTTPS), `8883/tcp` (MQTT sur TLS) et `8554/tcp` (RTSP, relais MediaMTX). Tout le trafic entrant sur `eth0` (LAN caméra) est également autorisé.
+
+### 9.3 Protection anti brute-force (Fail2ban)
+- Jail `sshd` configurée dans `/etc/fail2ban/jail.d/sshd.local` (et non en modifiant `jail.conf`) : **3 échecs en 10 min → bannissement 1 h**, journaux lus via `systemd`.
+- Vérification : `fail2ban-client status sshd` liste les IP bannies.
+
+### 9.4 Réseau local dédié à la caméra
+- Un point d'accès Wi-Fi (`Sentinel-AP`, WPA2-PSK) a été testé puis **abandonné** au profit d'une liaison **Ethernet** directe.
+- Le Pi a une IP fixe `192.168.10.15/24` sur `eth0` (profil NetworkManager `Sentinel-LAN`) ; la caméra est sur le même sous-réseau (`192.168.10.41`). La caméra n'est ainsi joignable que depuis le Pi, pas depuis Internet.
+
+### 9.5 Relais du flux caméra (MediaMTX)
+- **MediaMTX** (binaire ARM64) lit le flux RTSP/H.264 de la caméra et le republie sur le chemin `cam` (`rtsp://<ip-du-pi>:8554/cam`). `sourceOnDemand: yes` : la caméra n'est sollicitée que lorsqu'un client est connecté.
+- Intérêt : une seule connexion vers la caméra, quel que soit le nombre de lecteurs, et les identifiants de la caméra restent sur le Pi (ils ne figurent que dans `mediamtx.yml`, jamais côté ATLAS).
+- Installé comme **service systemd** (`mediamtx.service`) : binaire dans `/usr/local/bin`, config dans `/usr/local/etc/mediamtx.yml`, démarrage automatique, redémarrage après 3 s en cas de crash, lancé sous un utilisateur non-root.
+- Supervision : `systemctl status mediamtx` et `journalctl -u mediamtx -f`.
+- Dans ATLAS, l'URL à fournir à `POST /api/start` est donc `rtsp://<ip-du-pi>:8554/cam`.
+
+## 10. Déploiement
 
 - **Local** : `uvicorn app:app --reload` → port 8000.
 - **Docker Compose** : `backend` (FastAPI, non publié) + `frontend` (nginx, port **8080**) qui sert `index.html` et proxifie `/api/` et `/captures/` vers le backend. Volumes : `data`, `uploads`, `models`.
 
-## 10. Données et configuration
+## 11. Données et configuration
 
 | Chemin | Contenu |
 |---|---|
@@ -136,7 +170,7 @@ Un **événement = un passage** : créé au premier visage validé, mis à jour 
 
 Variables `.env` : voir `README.md` (identifiants, `APP_SESSION_SECRET`, `ATLAS_AGENT_TOKEN`, `NTFY_*`, `SMTP_*`, `FACE_RECOGNITION_THRESHOLD`).
 
-## 11. Limites connues
+## 12. Limites connues
 
 - **Un seul flux** analysé à la fois ; état (alarme, code, tentatives de login, dernier relevé du Pi) **en mémoire** : perdu au redémarrage, non partagé entre plusieurs workers.
 - **Dockerfile.backend** ne copie que `app.py` et `history.py` : `face_db.py` doit y être ajouté pour que l'image démarre.

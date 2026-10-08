@@ -21,7 +21,7 @@ def test_unauthenticated_status_requires_login():
 def test_valid_login_sets_cookie_and_redirects():
     response = client.post(
         "/api/login",
-        data={"username": app_module.APP_USERNAME, "password": app_module.APP_PASSWORD},
+        data={"username": app_module.APP_ADMIN_USERNAME, "password": app_module.APP_ADMIN_PASSWORD},
         follow_redirects=False,
     )
     assert response.status_code == 303
@@ -31,7 +31,7 @@ def test_valid_login_sets_cookie_and_redirects():
 def test_logout_clears_session_cookie_and_redirects():
     client.post(
         "/api/login",
-        data={"username": app_module.APP_USERNAME, "password": app_module.APP_PASSWORD},
+        data={"username": app_module.APP_ADMIN_USERNAME, "password": app_module.APP_ADMIN_PASSWORD},
         follow_redirects=False,
     )
     response = client.post("/api/logout", follow_redirects=False)

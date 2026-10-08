@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import hmac
+import ipaddress
 import os
 import shutil
 import smtplib
@@ -151,19 +152,41 @@ def notify(jpeg):
 
 load_env()
 
-app = FastAPI()
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 APP_ADMIN_USERNAME = os.environ.get("APP_ADMIN_USERNAME", os.environ.get("APP_USERNAME", "admin")).strip()
 APP_ADMIN_PASSWORD = os.environ.get("APP_ADMIN_PASSWORD", os.environ.get("APP_PASSWORD", "admin123"))
 APP_USER_USERNAME = os.environ.get("APP_USER_USERNAME", "user").strip()
 APP_USER_PASSWORD = os.environ.get("APP_USER_PASSWORD", "user123")
-APP_SESSION_SECRET = os.environ.get("APP_SESSION_SECRET", "change-me-in-production")
+APP_SESSION_SECRET = os.environ.get("APP_SESSION_SECRET", "")
 APP_SECURE_COOKIES = os.environ.get("APP_SECURE_COOKIES", "0").strip().lower() in {"1", "true", "yes", "on"}
 SESSION_TTL_SECONDS = int(os.environ.get("APP_SESSION_TTL_SECONDS", "86400"))
 MAX_LOGIN_ATTEMPTS = int(os.environ.get("APP_MAX_LOGIN_ATTEMPTS", "5"))
 LOGIN_BLOCK_SECONDS = int(os.environ.get("APP_LOGIN_BLOCK_SECONDS", "300"))
 USER_DB_PATH = BASE / "data" / "users.db"
 LOGIN_ATTEMPTS = {}
+DISARM_ATTEMPTS = {}
+MAX_UPLOAD_BYTES = int(os.environ.get("APP_MAX_UPLOAD_MB", "500")) * 1024 * 1024
+ALLOWED_UPLOAD_EXT = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".m4v"}
+ALLOWED_STREAM_SCHEMES = {"rtsp", "rtsps"}
+WEAK_SECRETS = {"", "change-me-in-production"}
+
+
+def _check_secrets():
+    """Génère un secret de session aléatoire persistant si aucun secret solide n'est configuré."""
+    global APP_SESSION_SECRET
+    if APP_SESSION_SECRET in WEAK_SECRETS:
+        # secret aléatoire persistant : jamais une valeur connue publiquement
+        secret_path = BASE / "data" / ".session_secret"
+        secret_path.parent.mkdir(parents=True, exist_ok=True)
+        if not secret_path.exists():
+            fd = os.open(secret_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "w") as f:
+                f.write(base64.urlsafe_b64encode(os.urandom(48)).decode("ascii"))
+        APP_SESSION_SECRET = secret_path.read_text().strip()
+
+
+_check_secrets()
 AGENT_METRICS_MAX_AGE = 20.0
 AGENT_TIMESTAMP_SKEW_SECONDS = 120.0
 MAX_AGENT_PAYLOAD_BYTES = 4096
@@ -202,6 +225,11 @@ def ensure_user_store():
         "password_hash TEXT NOT NULL, "
         "role TEXT NOT NULL DEFAULT 'user')"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sessions ("
+        "token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, created_at INTEGER NOT NULL)"
+    )
+    conn.execute("DELETE FROM sessions WHERE created_at < ?", (int(time.time()) - SESSION_TTL_SECONDS,))
     columns = [row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()]
     if "role" not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
@@ -276,8 +304,8 @@ def get_session_user(request: Request) -> dict | None:
     if not username:
         return None
     role = get_user_role(username)
-    if role is None:
-        role = "admin" if username == APP_ADMIN_USERNAME else "user"
+    if role is None:  # compte supprimé : la session ne vaut plus rien
+        return None
     return {"username": username, "role": role}
 
 
@@ -290,39 +318,43 @@ def require_admin(request: Request) -> dict:
     return user
 
 
+def _token_hash(token: str) -> str:
+    return hmac.new(APP_SESSION_SECRET.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def encode_session(username: str) -> str:
-    now = int(time.time())
-    payload = f"{username}:{now}".encode("utf-8")
-    signature = hmac.new(APP_SESSION_SECRET.encode("utf-8"), payload, hashlib.sha256).hexdigest()
-    token = f"{username}:{now}:{signature}"
-    return base64.b64encode(token.encode("utf-8")).decode("ascii")
+    """Crée une session côté serveur ; le cookie ne contient qu'un jeton aléatoire opaque."""
+    token = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+    conn = sqlite3.connect(USER_DB_PATH)
+    conn.execute(
+        "INSERT INTO sessions (token_hash, username, created_at) VALUES (?, ?, ?)",
+        (_token_hash(token), username, int(time.time())),
+    )
+    conn.commit()
+    conn.close()
+    return token
 
 
 def decode_session(raw: str | None) -> str | None:
+    if not raw or len(raw) > 128:
+        return None
+    conn = sqlite3.connect(USER_DB_PATH)
+    row = conn.execute(
+        "SELECT username, created_at FROM sessions WHERE token_hash = ?", (_token_hash(raw),)
+    ).fetchone()
+    conn.close()
+    if row is None or int(time.time()) - row[1] > SESSION_TTL_SECONDS:
+        return None
+    return row[0]
+
+
+def revoke_session(raw: str | None) -> None:
     if not raw:
-        return None
-    try:
-        decoded = base64.b64decode(raw.encode("ascii")).decode("utf-8")
-    except Exception:
-        return None
-    parts = decoded.split(":")
-    if len(parts) != 3:
-        return None
-    username, ts_raw, signature = parts
-    if not username or not ts_raw.isdigit():
-        return None
-    ts = int(ts_raw)
-    now = int(time.time())
-    if now - ts > SESSION_TTL_SECONDS:
-        return None
-    expected = hmac.new(
-        APP_SESSION_SECRET.encode("utf-8"),
-        f"{username}:{ts_raw}".encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    if not hmac.compare_digest(signature, expected):
-        return None
-    return username
+        return
+    conn = sqlite3.connect(USER_DB_PATH)
+    conn.execute("DELETE FROM sessions WHERE token_hash = ?", (_token_hash(raw),))
+    conn.commit()
+    conn.close()
 
 
 def _login_key(username: str, client_ip: str) -> str:
@@ -360,8 +392,10 @@ async def security_middleware(request: Request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
+    if request.url.scheme == "https":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
     return response
 
 
@@ -371,13 +405,17 @@ async def auth_middleware(request: Request, call_next):
     public_paths = {"/login", "/api/login"}
     if path in public_paths or path == "/api/system/agent" or path.startswith("/static/"):
         return await call_next(request)
-    if path.startswith("/api/") or path in {"/", "/captures", "/people-photos"}:
+    if path.startswith(("/api/", "/captures", "/people-photos")) or path == "/":
         user = get_session_user(request)
         if user is None:
             if path.startswith("/api/"):
                 return JSONResponse({"detail": "Authentification requise"}, status_code=401)
             return RedirectResponse(url="/login", status_code=303)
         request.state.user = user
+        if (path.startswith("/people-photos") or path == "/api/events/export.csv") and user["role"] != "admin":
+            if path.startswith("/api/"):
+                return JSONResponse({"detail": "Accès réservé à l'administrateur"}, status_code=403)
+            return Response(status_code=403)
     return await call_next(request)
 
 
@@ -439,7 +477,7 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
     cookie_kwargs = {
         "httponly": True,
         "samesite": "lax",
-        "secure": APP_SECURE_COOKIES,
+        "secure": APP_SECURE_COOKIES or request.url.scheme == "https",
         "max_age": SESSION_TTL_SECONDS,
     }
     if response is not None:
@@ -450,7 +488,8 @@ def login(request: Request, username: str = Form(...), password: str = Form(...)
 
 
 @app.post("/api/logout")
-def logout(response: Response):
+def logout(request: Request, response: Response):
+    revoke_session(request.cookies.get("argus_session"))
     response.delete_cookie(
         key="argus_session",
         path="/",
@@ -803,19 +842,53 @@ class AgentSystemMetrics(BaseModel):
     timestamp: float = Field(gt=0)
 
 
+def validate_stream_url(raw: str) -> str:
+    """N'accepte que des flux RTSP vers une IP/hôte non sensible (pas de file://, chemins locaux, loopback, metadata)."""
+    url = (raw or "").strip()
+    parts = urlsplit(url)
+    if parts.scheme.lower() not in ALLOWED_STREAM_SCHEMES or not parts.hostname:
+        raise HTTPException(400, "URL invalide : seuls les flux rtsp:// ou rtsps:// sont acceptés")
+    try:
+        infos = socket.getaddrinfo(parts.hostname, parts.port or 554, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        raise HTTPException(400, "Hôte du flux introuvable") from None
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+            raise HTTPException(400, "Adresse du flux non autorisée")
+    return url
+
+
 @app.post("/api/start")
-def start(req: StartRequest):
-    detector.start(req.url.strip())
+def start(request: Request, req: StartRequest):
+    require_admin(request)
+    detector.start(validate_stream_url(req.url))
     return {"ok": True}
 
 
 @app.post("/api/upload")
-def upload(file: UploadFile = File(...)):
+def upload(request: Request, file: UploadFile = File(...)):
+    require_admin(request)
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in ALLOWED_UPLOAD_EXT:
+        raise HTTPException(400, "Format de vidéo non autorisé")
     UPLOAD_DIR.mkdir(exist_ok=True)
-    dest = UPLOAD_DIR / f"{uuid.uuid4().hex}{Path(file.filename or '').suffix}"
-    with open(dest, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-    detector.start(str(dest), label=file.filename or dest.name)
+    dest = UPLOAD_DIR / f"{uuid.uuid4().hex}{ext}"
+    written = 0
+    try:
+        with open(dest, "wb") as f:
+            while chunk := file.file.read(1024 * 1024):
+                written += len(chunk)
+                if written > MAX_UPLOAD_BYTES:
+                    raise HTTPException(413, "Fichier trop volumineux")
+                f.write(chunk)
+    except BaseException:
+        dest.unlink(missing_ok=True)
+        raise
+    for old in sorted(UPLOAD_DIR.glob("*"), key=lambda p: p.stat().st_mtime)[:-3]:
+        if old != dest:
+            old.unlink(missing_ok=True)  # ne garde que les dernières vidéos
+    detector.start(str(dest), label=Path(file.filename).name)
     return {"ok": True}
 
 
@@ -824,19 +897,22 @@ class SeekRequest(BaseModel):
 
 
 @app.post("/api/pause")
-def pause():
+def pause(request: Request):
+    require_admin(request)
     detector.pause()
     return {"ok": True}
 
 
 @app.post("/api/resume")
-def resume():
+def resume(request: Request):
+    require_admin(request)
     detector.resume()
     return {"ok": True}
 
 
 @app.post("/api/seek")
-def seek(req: SeekRequest):
+def seek(request: Request, req: SeekRequest):
+    require_admin(request)
     detector.seek(req.t)
     return {"ok": True}
 
@@ -851,22 +927,32 @@ def check_code(code):
 
 
 @app.post("/api/alarm/arm")
-def alarm_arm(req: CodeRequest):
+def alarm_arm(request: Request, req: CodeRequest):
+    require_admin(request)
     check_code(req.code)
     detector.arm(req.code)
     return {"ok": True}
 
 
 @app.post("/api/alarm/disarm")
-def alarm_disarm(req: CodeRequest):
+def alarm_disarm(request: Request, req: CodeRequest):
+    user = require_admin(request)
     check_code(req.code)
+    now = time.time()
+    recent = [t for t in DISARM_ATTEMPTS.get(user["username"], []) if now - t < LOGIN_BLOCK_SECONDS]
+    if len(recent) >= MAX_LOGIN_ATTEMPTS:
+        DISARM_ATTEMPTS[user["username"]] = recent
+        raise HTTPException(429, "Trop d'essais de code. Réessaie plus tard.")
     if not detector.disarm(req.code):
+        DISARM_ATTEMPTS[user["username"]] = recent + [now]
         raise HTTPException(403, "Code incorrect")
+    DISARM_ATTEMPTS.pop(user["username"], None)
     return {"ok": True}
 
 
 @app.post("/api/stop")
-def stop():
+def stop(request: Request):
+    require_admin(request)
     detector.stop()
     return {"ok": True}
 

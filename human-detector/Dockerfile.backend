@@ -11,7 +11,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py history.py ./
+COPY app.py history.py face_db.py ./
+COPY static/ ./static/
 
 # utilisateur non-root ; les dossiers appartiennent à "app" pour que les volumes nommés soient inscriptibles
 RUN useradd --create-home --uid 1000 app \
@@ -24,4 +25,6 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
     CMD python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/api/status', timeout=3)"
 
 # un seul worker : l'état (flux, alarme) vit en mémoire dans le processus
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]
+# --proxy-headers : IP client réelle (X-Forwarded-For) transmise par nginx ; le backend n'est pas publié,
+# seul nginx peut l'atteindre.
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips=*"]

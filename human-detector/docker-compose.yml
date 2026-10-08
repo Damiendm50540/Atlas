@@ -6,6 +6,15 @@ services:
       context: .
       dockerfile: Dockerfile.backend
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    environment:
+      TORCH_HOME: /app/models/torch  # poids facenet : seul le volume models est inscriptible
     # notifications (ntfy / email) : variables du fichier .env, facultatif
     env_file:
       - path: .env
@@ -21,6 +30,13 @@ services:
       context: .
       dockerfile: Dockerfile.frontend
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
     ports:
       - "8080:80"
     depends_on:

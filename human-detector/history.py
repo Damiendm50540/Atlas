@@ -139,12 +139,13 @@ class History:
         w = csv.writer(out)
         w.writerow(["id", "debut", "fin", "duree_s", "source", "type_source", "position_video_s",
                     "visages_max", "confiance", "alarme_active", "photo"])
+        safe = lambda v: "'" + v if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r") else v  # anti injection de formule
         fmt = lambda t: time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t))
         for r in rows:
             w.writerow([r["id"], fmt(r["started_at"]), fmt(r["ended_at"]),
-                        round(r["ended_at"] - r["started_at"], 1), r["source"], r["source_type"],
+                        round(r["ended_at"] - r["started_at"], 1), safe(r["source"]), r["source_type"],
                         "" if r["video_time"] is None else round(r["video_time"], 1),
-                        r["faces"], round(r["score"], 3), "oui" if r["alarm"] else "non", r["photo"] or ""])
+                        r["faces"], round(r["score"], 3), "oui" if r["alarm"] else "non", safe(r["photo"] or "")])
         return out.getvalue()
 
     def stats(self):

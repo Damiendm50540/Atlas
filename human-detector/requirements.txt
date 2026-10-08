@@ -1,14 +1,14 @@
-fastapi
-uvicorn
-python-multipart
-certifi
-psutil
+fastapi==0.124.0
+uvicorn==0.38.0
+python-multipart==0.0.32
+certifi==2025.11.12
+psutil==7.2.2
 # MediaPipe >= 1.0 plante sur macOS (initialisation Metal) ; 0.10.30 n'a pas de build Linux ARM
 mediapipe==0.10.30; sys_platform == "darwin"
 mediapipe==0.10.18; sys_platform == "linux"
 mediapipe==0.10.35; sys_platform == "win32"
 opencv-python; sys_platform != "win32"
 # Reconnaissance faciale (embeddings 512-d via InceptionResnetV1)
-torch
-torchvision
-facenet-pytorch
+torch>=2.2,<3
+torchvision>=0.17,<1
+facenet-pytorch==2.5.3
